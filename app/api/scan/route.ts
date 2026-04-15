@@ -1,30 +1,48 @@
+import { WATCHLIST } from "@/lib/watchlist";
+import { normalizeQuote } from "@/lib/normalize";
+import { computeSignal } from "@/lib/signals";
+
 export async function GET() {
-  const apiKey = process.env.FINNHUB_API_KEY;
+  try {
+    const apiKey = process.env.FINNHUB_API_KEY;
 
-  const symbols = ["BBAI", "ACHR", "SOFI", "OPEN", "MVST"];
+    const results: any[] = [];
 
-  const results = [];
+    for (const symbol of WATCHLIST) {
+      const res = await fetch(
+        `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${apiKey}`
+      );
 
-  for (const symbol of symbols) {
-    const res = await fetch(
-      `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${apiKey}`
-    );
+      const data = await res.json();
 
-    const data = await res.json();
+      const normalized = normalizeQuote(symbol, data);
+      if (!normalized) continue;
 
-    const price = data.c;
-    const prevClose = data.pc;
+      const volume = data.v || 0;
 
-    if (!price || !prevClose) continue;
+      const signalData = computeSignal(
+        normalized.changePercent,
+        volume
+      );
 
-    const changePercent = ((price - prevClose) / prevClose) * 100;
+      results.push({
+        ...normalized,
+        volume,
+        ...signalData,
+      });
+    }
 
-    results.push({
-      symbol,
-      price,
-      changePercent: Number(changePercent.toFixed(2)),
+    results.sort((a, b) => b.score - a.score);
+
+    return Response.json({
+      updatedAt: new Date().toISOString(),
+      count: results.length,
+      data: results.slice(0, 10),
+    });
+  } catch (err) {
+    return Response.json({
+      error: "Scanner failed",
+      details: String(err),
     });
   }
-
-  return Response.json(results);
 }
