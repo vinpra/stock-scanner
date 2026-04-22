@@ -1,48 +1,35 @@
-import { WATCHLIST } from "@/lib/watchlist";
-import { normalizeQuote } from "@/lib/normalize";
-import { computeSignal } from "@/lib/signals";
+import { evaluateStock } from "@/lib/signalEngine";
 
-export async function GET() {
-  try {
-    const apiKey = process.env.FINNHUB_API_KEY;
+export async function POST(req: Request) {
+  const apiKey = process.env.FINNHUB_API_KEY;
 
-    const results: any[] = [];
+  const body = await req.json();
+  const tickers = body.tickers
+    .split(",")
+    .map((t: string) => t.trim().toUpperCase())
+    .filter(Boolean);
 
-    for (const symbol of WATCHLIST) {
-      const res = await fetch(
-        `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${apiKey}`
-      );
+  const results = [];
 
-      const data = await res.json();
+  for (const symbol of tickers) {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${apiKey}`
+    );
 
-      const normalized = normalizeQuote(symbol, data);
-      if (!normalized) continue;
+    const data = await res.json();
 
-      const volume = data.v || 0;
+    const stock = {
+      symbol,
+      price: data.c,
+      prevClose: data.pc,
+      changePercent: ((data.c - data.pc) / data.pc) * 100,
+      volume: data.v ?? 0,
+    };
 
-      const signalData = computeSignal(
-        normalized.changePercent,
-        volume
-      );
-
-      results.push({
-        ...normalized,
-        volume,
-        ...signalData,
-      });
-    }
-
-    results.sort((a, b) => b.score - a.score);
-
-    return Response.json({
-      updatedAt: new Date().toISOString(),
-      count: results.length,
-      data: results.slice(0, 10),
-    });
-  } catch (err) {
-    return Response.json({
-      error: "Scanner failed",
-      details: String(err),
-    });
+    results.push(evaluateStock(stock));
   }
+
+  return Response.json({
+    data: results.sort((a, b) => b.score - a.score),
+  });
 }
