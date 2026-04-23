@@ -10,6 +10,7 @@ export default function ChartCard({ symbol }: { symbol: string }) {
     <>
       {/* MINI CHART CARD */}
       <div
+        className="h-full"
         style={{
           background: "#ffffff",
           border: "1px solid #e2e8f0",
@@ -45,7 +46,7 @@ export default function ChartCard({ symbol }: { symbol: string }) {
         </div>
 
         {/* MINI CHART */}
-      <div style={{ width: "100%", height: 220 }}>
+      <div className="w-full h-full">
           <StockChart symbol={symbol} />
         </div>
       </div>

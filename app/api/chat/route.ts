@@ -1,6 +1,15 @@
+import { NextResponse } from "next/server";
+
 export async function POST(req: Request) {
   try {
     const { message } = await req.json();
+
+    if (!message) {
+      return NextResponse.json(
+        { error: "Message is required", reply: null },
+        { status: 400 }
+      );
+    }
 
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -25,19 +34,47 @@ export async function POST(req: Request) {
     console.log("OPENAI RAW RESPONSE:", JSON.stringify(data, null, 2));
 
     if (!res.ok) {
-      return Response.json({
-        reply: `OpenAI error: ${data.error?.message || "unknown error"}`,
-      });
+      return NextResponse.json(
+        {
+          error: `OpenAI error: ${data.error?.message || "unknown error"}`,
+          reply: null,
+        },
+        { status: res.status }
+      );
     }
 
     const reply = data?.choices?.[0]?.message?.content;
 
-    return Response.json({
+    return NextResponse.json({
       reply: reply || "Empty response from AI",
     });
   } catch (err: any) {
-    return Response.json({
-      reply: "Server error: " + err.message,
-    });
+    console.error("Chat error:", err);
+    return NextResponse.json(
+      {
+        error: "Server error: " + err.message,
+        reply: null,
+      },
+      { status: 500 }
+    );
   }
+}
+
+export async function GET(req: Request) {
+  return NextResponse.json(
+    {
+      error: "Use POST with { message: 'your question' } to chat with AI",
+      reply: null,
+    },
+    { status: 405 }
+  );
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      "Allow": "POST, OPTIONS",
+    },
+  });
 }

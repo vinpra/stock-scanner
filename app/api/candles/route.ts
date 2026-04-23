@@ -1,6 +1,15 @@
+import { NextResponse } from "next/server";
+
 export async function POST(req: Request) {
   try {
     const { symbol } = await req.json();
+
+    if (!symbol) {
+      return NextResponse.json(
+        { error: "Symbol is required", candles: [] },
+        { status: 400 }
+      );
+    }
 
     const apiKey = process.env.MASSIVE_API_KEY;
 
@@ -29,8 +38,31 @@ export async function POST(req: Request) {
       close: c.c,
     }));
 
-    return Response.json({ candles });
+    return NextResponse.json({ candles });
   } catch (err) {
-    return Response.json({ candles: [] });
+    console.error("Candles fetch error:", err);
+    return NextResponse.json(
+      { error: "Failed to fetch candles", candles: [] },
+      { status: 500 }
+    );
   }
+}
+
+export async function GET(req: Request) {
+  return NextResponse.json(
+    {
+      error: "Use POST with { symbol: 'AAPL' } to fetch candles",
+      candles: [],
+    },
+    { status: 405 }
+  );
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      "Allow": "POST, OPTIONS",
+    },
+  });
 }
