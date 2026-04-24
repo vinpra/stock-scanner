@@ -13,6 +13,7 @@ type Stock = {
   vwapDist: number;
   score: number;
   signal: string;
+  entry: number;
   stopLoss: number;
   takeProfit: number;
 };
@@ -34,9 +35,10 @@ type SortKey =
   | "symbol"
   | "price"
   | "gapPercent"
-  | "vwapDist"
   | "volume"
   | "score"
+  | "entry"
+  | "stopLoss"
   | "takeProfit";
 
 const cardClasses =
@@ -54,6 +56,7 @@ export default function HomePage() {
   const [layoutMode, setLayoutMode] = useState<"grid" | "card">("grid");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
+  const [searchTicker, setSearchTicker] = useState("");
 
   const formatNumber = (value: number | string | undefined, digits = 2) => {
     if (value == null || value === "") return "-";
@@ -61,12 +64,16 @@ export default function HomePage() {
     return Number.isNaN(numberValue) ? "-" : numberValue.toFixed(digits);
   };
 
-  const loadScanner = async () => {
+  const loadScanner = async (symbol?: string) => {
     setLoadingScanner(true);
     try {
-      const res = await fetch("/api/scanner?topN=25");
+      const url = symbol ? `/api/scanner?symbol=${encodeURIComponent(symbol)}` : "/api/scanner?topN=25";
+      const res = await fetch(url);
       const data = await res.json();
       setScanner(data.data || []);
+      if (symbol && data.data && data.data.length > 0) {
+        setSelected(symbol);
+      }
     } finally {
       setLoadingScanner(false);
     }
@@ -179,14 +186,11 @@ export default function HomePage() {
               <h1 className="mt-2 text-2xl font-semibold text-slate-900">
                 Scanner overview
               </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                Top momentum candidates across gap, VWAP, volume, and score.
-              </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <button
                 type="button"
-                onClick={loadScanner}
+                onClick={() => loadScanner()}
                 className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
               >
                 Refresh scan
@@ -293,6 +297,19 @@ export default function HomePage() {
                   <h2 className="mt-2 text-2xl font-semibold text-slate-900">
                     Momentum leaders
                   </h2>
+                  <input
+                    type="text"
+                    value={searchTicker}
+                    onChange={(e) => setSearchTicker(e.target.value.toUpperCase())}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && searchTicker.trim()) {
+                        loadScanner(searchTicker.trim());
+                        setSearchTicker("");
+                      }
+                    }}
+                    placeholder="Search ticker..."
+                    className="mt-2 px-3 py-1 border border-slate-300 rounded-md text-sm"
+                  />
                 </div>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-sm text-slate-500">
@@ -349,24 +366,30 @@ export default function HomePage() {
                           Gap %{sortIndicator("gapPercent")}
                         </th>
                         <th
-                          onClick={() => handleSort("vwapDist")}
-                          className="cursor-pointer px-4 py-3 font-medium"
-                        >
-                          VWAP %{sortIndicator("vwapDist")}
-                        </th>
-                        <th
                           onClick={() => handleSort("score")}
                           className="cursor-pointer px-4 py-3 font-medium"
                         >
                           Score{sortIndicator("score")}
                         </th>
-                        <th className="px-4 py-3 font-medium">Signal</th>
+                        <th
+                          onClick={() => handleSort("entry")}
+                          className="cursor-pointer px-4 py-3 font-medium"
+                        >
+                          Entry{sortIndicator("entry")}
+                        </th>
+                        <th
+                          onClick={() => handleSort("stopLoss")}
+                          className="cursor-pointer px-4 py-3 font-medium"
+                        >
+                          Stop Loss{sortIndicator("stopLoss")}
+                        </th>
                         <th
                           onClick={() => handleSort("takeProfit")}
                           className="cursor-pointer px-4 py-3 font-medium"
                         >
-                          Target{sortIndicator("takeProfit")}
+                          Take Profit{sortIndicator("takeProfit")}
                         </th>
+                        <th className="px-4 py-3 font-medium">Signal</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
@@ -383,12 +406,11 @@ export default function HomePage() {
                           </td>
                           <td className="px-4 py-4 text-slate-700">${formatNumber(stock.price)}</td>
                           <td className="px-4 py-4 text-slate-700">{formatNumber(stock.gapPercent)}%</td>
-                          <td className="px-4 py-4 text-slate-700">{formatNumber(stock.vwapDist)}%</td>
                           <td className="px-4 py-4 text-slate-700">{formatNumber(stock.score, 1)}</td>
+                          <td className="px-4 py-4 text-slate-700">${formatNumber(stock.entry)}</td>
+                          <td className="px-4 py-4 text-rose-600">${formatNumber(stock.stopLoss)}</td>
+                          <td className="px-4 py-4 text-emerald-600">${formatNumber(stock.takeProfit)}</td>
                           <td className="px-4 py-4 text-slate-700">{stock.signal}</td>
-                          <td className="px-4 py-4 text-emerald-600">
-                            ${formatNumber(stock.takeProfit)}
-                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -421,15 +443,19 @@ export default function HomePage() {
                         <span className="font-semibold text-slate-900">{formatNumber(stock.gapPercent)}%</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span>VWAP %</span>
-                        <span className="font-semibold text-slate-900">{formatNumber(stock.vwapDist)}%</span>
-                      </div>
-                      <div className="flex items-center justify-between">
                         <span>Score</span>
                         <span className="font-semibold text-slate-900">{formatNumber(stock.score, 1)}</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span>Target</span>
+                        <span>Entry</span>
+                        <span className="font-semibold text-slate-900">${formatNumber(stock.entry)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>Stop Loss</span>
+                        <span className="font-semibold text-rose-600">${formatNumber(stock.stopLoss)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>Take Profit</span>
                         <span className="font-semibold text-emerald-600">${formatNumber(stock.takeProfit)}</span>
                       </div>
                     </div>

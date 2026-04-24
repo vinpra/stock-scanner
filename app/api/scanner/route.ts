@@ -8,9 +8,18 @@ type RawStock = {
   h: number;
   l: number;
   v: number;
+  prevClose: number;
 };
 
-function compute(s: RawStock, prevClose: number) {
+const TOP_TICKERS = [
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'BABA', 'ORCL',
+  'CRM', 'AMD', 'INTC', 'UBER', 'SPOT', 'PYPL', 'SQ', 'SHOP', 'ZM', 'DOCU',
+  'COIN', 'PLTR', 'SNOW', 'CRWD', 'ZS', 'NET', 'OKTA', 'DDOG', 'MDB', 'TWLO',
+  'FSLY', 'PINS', 'FUBO', 'ETSY', 'SE', 'BIDU', 'JD', 'NTES', 'IQ', 'TME',
+  'BILI', 'VIPS', 'WB', 'YY'
+];
+
+function compute(s: RawStock) {
   const open = Number(s.o);
   const close = Number(s.c);
   const high = Number(s.h);
@@ -19,8 +28,10 @@ function compute(s: RawStock, prevClose: number) {
 
   if (!s.T || !open || !close) return null;
 
-  const gapPercent = ((open - prevClose) / prevClose) * 100;
+  const gapPercent = ((open - s.prevClose) / s.prevClose) * 100;
   const momentum = ((close - open) / open) * 100;
+  const vwap = (high + low + close + close) / 4; // simple approximation for daily VWAP
+  const vwapDist = ((close - vwap) / vwap) * 100;
 
   const score =
     Math.abs(gapPercent) * 2 +
@@ -53,6 +64,8 @@ function compute(s: RawStock, prevClose: number) {
     gapPercent: Number(gapPercent.toFixed(2)),
     momentum: Number(momentum.toFixed(2)),
     volume,
+    vwap: Number(vwap.toFixed(2)),
+    vwapDist: Number(vwapDist.toFixed(2)),
     score: Number(score.toFixed(2)),
     signal,
     entry: Number(close.toFixed(2)),
@@ -62,26 +75,62 @@ function compute(s: RawStock, prevClose: number) {
 }
 
 async function getRaw() {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  const key = `raw:${date.toISOString().split("T")[0]}`;
+  const today = new Date().toISOString().split('T')[0];
+  const cacheKey = `premarket:${today}`;
+  const cacheTTL = Number(process.env.PREMARKET_CACHE_TTL || 60); // seconds, default 1 minute
 
-  let raw = await redis.get(key);
-
-  if (!raw) {
-    const res = await fetch(
-      `https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/${
-        key.split(":")[1]
-      }?adjusted=true&apiKey=${process.env.MASSIVE_API_KEY}`
-    );
-
-    const json = await res.json();
-    raw = json.results || [];
-
-    await redis.set(key, raw, { ex: 86400 });
+  // Check cache first
+  let cached = await redis.get(cacheKey);
+  if (cached) {
+    return cached as RawStock[];
   }
 
-  return raw as RawStock[];
+  // Fetch fresh data
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  const results: RawStock[] = [];
+
+  for (const ticker of TOP_TICKERS) {
+    try {
+      // Fetch previous day daily for prevClose
+      const prevRes = await fetch(
+        `https://api.massive.com/v2/aggs/ticker/${ticker}/range/1/day/${yesterday}/${yesterday}?adjusted=true&apiKey=${process.env.MASSIVE_API_KEY}`
+      );
+      const prevData = await prevRes.json();
+      const prevClose = prevData.results?.[0]?.c || 0;
+
+      // Fetch today's intraday minute bars
+      const intraRes = await fetch(
+        `https://api.massive.com/v2/aggs/ticker/${ticker}/range/1/minute/${today}/${today}?adjusted=true&apiKey=${process.env.MASSIVE_API_KEY}`
+      );
+      const intraData = await intraRes.json();
+
+      if (intraData.results && intraData.results.length > 0) {
+        const bars = intraData.results;
+        const open = bars[0].o;
+        const close = bars[bars.length - 1].c;
+        const high = Math.max(...bars.map((b: any) => b.h));
+        const low = Math.min(...bars.map((b: any) => b.l));
+        const volume = bars.reduce((sum: number, b: any) => sum + b.v, 0);
+
+        results.push({
+          T: ticker,
+          o: open,
+          c: close,
+          h: high,
+          l: low,
+          v: volume,
+          prevClose
+        });
+      }
+    } catch (error) {
+      console.error(`Error fetching data for ${ticker}:`, error);
+    }
+  }
+
+  // Cache the results
+  await redis.set(cacheKey, results, { ex: cacheTTL });
+
+  return results;
 }
 
 export async function GET(req: Request) {
@@ -96,30 +145,63 @@ export async function GET(req: Request) {
     return NextResponse.json({ data: [] });
   }
 
-  const prevCloseMap: Record<string, number> = {};
-  raw.forEach((s) => (prevCloseMap[s.T] = s.c));
-
   // 🔍 SINGLE TICKER MODE
   if (symbol) {
-    const found = raw.find((s) => s.T === symbol);
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 
-    if (!found) {
-      return NextResponse.json({ data: [] });
+    try {
+      // Fetch previous day daily for prevClose
+      const prevRes = await fetch(
+        `https://api.massive.com/v2/aggs/ticker/${symbol}/range/1/day/${yesterday}/${yesterday}?adjusted=true&apiKey=${process.env.MASSIVE_API_KEY}`
+      );
+      const prevData = await prevRes.json();
+      const prevClose = prevData.results?.[0]?.c || 0;
+
+      // Fetch today's intraday
+      const intraRes = await fetch(
+        `https://api.massive.com/v2/aggs/ticker/${symbol}/range/1/minute/${today}/${today}?adjusted=true&apiKey=${process.env.MASSIVE_API_KEY}`
+      );
+      const intraData = await intraRes.json();
+
+      if (intraData.results && intraData.results.length > 0) {
+        const bars = intraData.results;
+        const open = bars[0].o;
+        const close = bars[bars.length - 1].c;
+        const high = Math.max(...bars.map((b: any) => b.h));
+        const low = Math.min(...bars.map((b: any) => b.l));
+        const volume = bars.reduce((sum: number, b: any) => sum + b.v, 0);
+
+        const rawStock: RawStock = {
+          T: symbol,
+          o: open,
+          c: close,
+          h: high,
+          l: low,
+          v: volume,
+          prevClose
+        };
+
+        const computed = compute(rawStock);
+
+        return NextResponse.json({
+          data: computed ? [computed] : [],
+          mode: "single",
+        });
+      }
+    } catch (error) {
+      console.error(`Error fetching single ticker ${symbol}:`, error);
     }
 
-    const computed = compute(found, prevCloseMap[symbol]);
-
-    return NextResponse.json({
-      data: computed ? [computed] : [],
-      mode: "single",
-    });
+    return NextResponse.json({ data: [] });
   }
 
   // 📊 TOP SCAN MODE
   const result = raw
-    .map((s) => compute(s, prevCloseMap[s.T]))
+    .map((s) => compute(s))
     .filter(Boolean)
-    .sort((a, b) => b!.score - a!.score);
+    .sort((a, b) => b!.score - a!.score)
+    .filter((item) => item!.price >= 5);
 
   return NextResponse.json({
     data: result.slice(0, topN),
