@@ -1,145 +1,128 @@
 import { NextResponse } from "next/server";
 import { redis } from "@/lib/redis";
 
-function scoreStock(s: any) {
-  const open = s.o;
-  const close = s.c;
-  const volume = s.v;
+type RawStock = {
+  T: string;
+  o: number;
+  c: number;
+  h: number;
+  l: number;
+  v: number;
+};
 
-  const changePercent =
-    open > 0 ? ((close - open) / open) * 100 : 0;
+function compute(s: RawStock, prevClose: number) {
+  const open = Number(s.o);
+  const close = Number(s.c);
+  const high = Number(s.h);
+  const low = Number(s.l);
+  const volume = Number(s.v);
 
-  const range = s.h && s.l ? ((s.h - s.l) / s.l) * 100 : 0;
+  if (!s.T || !open || !close) return null;
+
+  const gapPercent = ((open - prevClose) / prevClose) * 100;
+  const momentum = ((close - open) / open) * 100;
 
   const score =
-    Math.abs(changePercent) * 2 +
-    Math.log10(volume || 1) +
-    range;
+    Math.abs(gapPercent) * 2 +
+    Math.abs(momentum) * 2 +
+    Math.log10(volume || 1);
 
   let signal = "👀 WATCH";
 
-  if (changePercent > 5 && volume > 1_000_000) {
+  if (gapPercent > 2 && momentum > 1 && volume > 500000) {
     signal = "🚀 BREAKOUT";
-  } else if (changePercent > 2) {
+  } else if (momentum > 2) {
     signal = "🔥 MOMENTUM";
-  } else if (changePercent < -3) {
+  } else if (momentum < -2) {
     signal = "🔻 FADE";
+  }
+
+  // 🛑 ALWAYS SET LEVELS
+  let stopLoss = close * 0.97;
+  let takeProfit = close * 1.05;
+
+  if (signal.includes("FADE")) {
+    stopLoss = close * 1.03;
+    takeProfit = close * 0.95;
   }
 
   return {
     symbol: s.T,
     price: close,
+    open,
+    gapPercent: Number(gapPercent.toFixed(2)),
+    momentum: Number(momentum.toFixed(2)),
     volume,
-    changePercent: Number(changePercent.toFixed(2)),
     score: Number(score.toFixed(2)),
     signal,
+    entry: Number(close.toFixed(2)),
+    stopLoss: Number(stopLoss.toFixed(2)),
+    takeProfit: Number(takeProfit.toFixed(2)),
   };
 }
 
-async function performScan() {
-  const today = new Date();
-  today.setDate(today.getDate() - 1);
-  const dateStr = today.toISOString().split("T")[0];
-  const cacheKey = `scanner:${dateStr}`;
+async function getRaw() {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  const key = `raw:${date.toISOString().split("T")[0]}`;
 
-  console.log("🔄 Running scan for", dateStr);
+  let raw = await redis.get(key);
 
-  const API_KEY = process.env.MASSIVE_API_KEY;
+  if (!raw) {
+    const res = await fetch(
+      `https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/${
+        key.split(":")[1]
+      }?adjusted=true&apiKey=${process.env.MASSIVE_API_KEY}`
+    );
 
-  const res = await fetch(
-    `https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/${dateStr}?adjusted=true&apiKey=${API_KEY}`
-  );
+    const json = await res.json();
+    raw = json.results || [];
 
-  const json = await res.json();
-  const results = json.results || [];
+    await redis.set(key, raw, { ex: 86400 });
+  }
 
-  const scored = results
-    .map(scoreStock)
-    .filter((s: any) => s.symbol && s.volume > 0)
-    .sort((a: any, b: any) => b.score - a.score);
-
-  // 💾 STORE IN REDIS (TTL 24 HOURS)
-  await redis.set(cacheKey, scored, { ex: 60 * 60 * 24 });
-
-  return scored;
+  return raw as RawStock[];
 }
 
 export async function GET(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const topN = parseInt(searchParams.get("topN") || "10");
+  const { searchParams } = new URL(req.url);
 
-    const today = new Date();
-    today.setDate(today.getDate() - 1);
+  const symbol = searchParams.get("symbol")?.toUpperCase();
+  const topN = Number(searchParams.get("topN") || 10);
 
-    const dateStr = today.toISOString().split("T")[0];
+  const raw = await getRaw();
 
-    const cacheKey = `scanner:${dateStr}`;
+  if (!raw.length) {
+    return NextResponse.json({ data: [] });
+  }
 
-    // ✅ CHECK REDIS CACHE
-    let cached: any = await redis.get(cacheKey);
+  const prevCloseMap: Record<string, number> = {};
+  raw.forEach((s) => (prevCloseMap[s.T] = s.c));
 
-    if (!cached) {
-      console.log("❌ CACHE MISS → AUTO-GENERATING SCAN");
-      try {
-        cached = await performScan();
-      } catch (scanErr) {
-        console.error("Auto-scan failed:", scanErr);
-        return NextResponse.json(
-          {
-            error: "Failed to generate scan. Try POST /api/scanner with manual trigger.",
-            data: [],
-          },
-          { status: 503 }
-        );
-      }
-    } else {
-      console.log("✅ CACHE HIT (GET)");
+  // 🔍 SINGLE TICKER MODE
+  if (symbol) {
+    const found = raw.find((s) => s.T === symbol);
+
+    if (!found) {
+      return NextResponse.json({ data: [] });
     }
 
-    return NextResponse.json({
-      data: (cached as any[]).slice(0, topN),
-      cached: !!cached,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("Scanner GET error:", err);
-    return NextResponse.json(
-      { error: "Server error", data: [] },
-      { status: 500 }
-    );
-  }
-}
-
-export async function POST(req: Request) {
-  try {
-    const body = await req.json().catch(() => ({}));
-    const { topN = 10 } = body;
-
-    console.log("📊 POST scan triggered");
-
-    const scored = await performScan();
+    const computed = compute(found, prevCloseMap[symbol]);
 
     return NextResponse.json({
-      data: scored.slice(0, topN),
-      total: scored.length,
-      cached: false,
-      timestamp: new Date().toISOString(),
+      data: computed ? [computed] : [],
+      mode: "single",
     });
-  } catch (err) {
-    console.error("Scanner POST error:", err);
-    return NextResponse.json(
-      { error: "Failed to scan stocks", data: [] },
-      { status: 500 }
-    );
   }
-}
 
-export async function OPTIONS(req: Request) {
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      "Allow": "GET, POST, OPTIONS",
-    },
+  // 📊 TOP SCAN MODE
+  const result = raw
+    .map((s) => compute(s, prevCloseMap[s.T]))
+    .filter(Boolean)
+    .sort((a, b) => b!.score - a!.score);
+
+  return NextResponse.json({
+    data: result.slice(0, topN),
+    mode: "scan",
   });
 }
