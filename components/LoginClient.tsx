@@ -44,33 +44,33 @@ export default function LoginClient() {
         <div className="grid w-full gap-6 lg:grid-cols-[1.1fr_0.9fr]">
           <section className="rounded-[2rem] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(148,163,184,0.24),_transparent_44%),linear-gradient(145deg,#0f172a,#1e293b)] p-8 text-white shadow-xl">
             <p className="text-xs font-semibold uppercase tracking-[0.35em] text-slate-300">
-              Stock Scanner
+              Quanticker
             </p>
             <h1 className="mt-4 max-w-md text-4xl font-semibold leading-tight">
-              Simple portfolio login for a shared hobby dashboard.
+              Market intelligence and portfolio tracking in one focused workspace.
             </h1>
             <p className="mt-4 max-w-lg text-sm leading-7 text-slate-300">
-              Each username has its own Redis-backed holdings. Register once, then
-              log in and the portfolio panel will load your saved positions.
+              Sign in to review scanner activity, monitor trade ideas, and manage
+              your saved portfolio with account-based access.
             </p>
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
-                  Users
+                  Access
                 </p>
-                <p className="mt-2 text-2xl font-semibold">Multi-user</p>
+                <p className="mt-2 text-2xl font-semibold">Secure login</p>
               </div>
               <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
-                  Session
+                  Workflow
                 </p>
-                <p className="mt-2 text-2xl font-semibold">Cookie-based</p>
+                <p className="mt-2 text-2xl font-semibold">Live scanner</p>
               </div>
               <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
                   Portfolio
                 </p>
-                <p className="mt-2 text-2xl font-semibold">Redis saved</p>
+                <p className="mt-2 text-2xl font-semibold">Persistent data</p>
               </div>
             </div>
           </section>
@@ -163,8 +163,8 @@ export default function LoginClient() {
             </button>
 
             <p className="mt-4 text-xs leading-6 text-slate-500">
-              This is lightweight hobby-app auth. Each account gets its own
-              cookie session and Redis-backed portfolio.
+              Quanticker keeps each account&apos;s portfolio data isolated and available
+              each time you sign in.
             </p>
           </section>
         </div>
