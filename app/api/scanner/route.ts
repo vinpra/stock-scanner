@@ -11,6 +11,14 @@ type RawStock = {
   prevClose: number;
 };
 
+type IntradayBar = {
+  o: number;
+  c: number;
+  h: number;
+  l: number;
+  v: number;
+};
+
 const TOP_TICKERS = [
   'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'BABA', 'ORCL',
   'CRM', 'AMD', 'INTC', 'UBER', 'SPOT', 'PYPL', 'SQ', 'SHOP', 'ZM', 'DOCU',
@@ -18,6 +26,34 @@ const TOP_TICKERS = [
   'FSLY', 'PINS', 'FUBO', 'ETSY', 'SE', 'BIDU', 'JD', 'NTES', 'IQ', 'TME',
   'BILI', 'VIPS', 'WB', 'YY'
 ];
+
+function formatDate(date: Date) {
+  return date.toISOString().split("T")[0];
+}
+
+function getTradingDate(baseDate = new Date()) {
+  const tradingDate = new Date(baseDate);
+
+  while (tradingDate.getDay() === 0 || tradingDate.getDay() === 6) {
+    tradingDate.setDate(tradingDate.getDate() - 1);
+  }
+
+  return tradingDate;
+}
+
+function getPreviousTradingDate(baseDate: Date) {
+  const previousTradingDate = new Date(baseDate);
+  previousTradingDate.setDate(previousTradingDate.getDate() - 1);
+
+  while (
+    previousTradingDate.getDay() === 0 ||
+    previousTradingDate.getDay() === 6
+  ) {
+    previousTradingDate.setDate(previousTradingDate.getDate() - 1);
+  }
+
+  return previousTradingDate;
+}
 
 function compute(s: RawStock) {
   const open = Number(s.o);
@@ -75,18 +111,20 @@ function compute(s: RawStock) {
 }
 
 async function getRaw() {
-  const today = new Date().toISOString().split('T')[0];
+  const tradingDate = getTradingDate();
+  const today = formatDate(tradingDate);
   const cacheKey = `premarket:${today}`;
   const cacheTTL = Number(process.env.PREMARKET_CACHE_TTL || 60); // seconds, default 1 minute
 
   // Check cache first
-  let cached = await redis.get(cacheKey);
+  const cached = await redis.get<RawStock[]>(cacheKey);
   if (cached) {
-    return cached as RawStock[];
+    return cached;
   }
 
   // Fetch fresh data
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  const previousTradingDate = getPreviousTradingDate(tradingDate);
+  const yesterday = formatDate(previousTradingDate);
   const results: RawStock[] = [];
 
   for (const ticker of TOP_TICKERS) {
@@ -105,12 +143,12 @@ async function getRaw() {
       const intraData = await intraRes.json();
 
       if (intraData.results && intraData.results.length > 0) {
-        const bars = intraData.results;
+        const bars = intraData.results as IntradayBar[];
         const open = bars[0].o;
         const close = bars[bars.length - 1].c;
-        const high = Math.max(...bars.map((b: any) => b.h));
-        const low = Math.min(...bars.map((b: any) => b.l));
-        const volume = bars.reduce((sum: number, b: any) => sum + b.v, 0);
+        const high = Math.max(...bars.map((b) => b.h));
+        const low = Math.min(...bars.map((b) => b.l));
+        const volume = bars.reduce((sum, b) => sum + b.v, 0);
 
         results.push({
           T: ticker,
@@ -127,8 +165,10 @@ async function getRaw() {
     }
   }
 
-  // Cache the results
-  await redis.set(cacheKey, results, { ex: cacheTTL });
+  // Avoid overwriting the last valid trading-day cache with an empty weekend response.
+  if (results.length > 0) {
+    await redis.set(cacheKey, results, { ex: cacheTTL });
+  }
 
   return results;
 }
@@ -147,8 +187,9 @@ export async function GET(req: Request) {
 
   // 🔍 SINGLE TICKER MODE
   if (symbol) {
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    const tradingDate = getTradingDate();
+    const today = formatDate(tradingDate);
+    const yesterday = formatDate(getPreviousTradingDate(tradingDate));
 
     try {
       // Fetch previous day daily for prevClose
@@ -165,12 +206,12 @@ export async function GET(req: Request) {
       const intraData = await intraRes.json();
 
       if (intraData.results && intraData.results.length > 0) {
-        const bars = intraData.results;
+        const bars = intraData.results as IntradayBar[];
         const open = bars[0].o;
         const close = bars[bars.length - 1].c;
-        const high = Math.max(...bars.map((b: any) => b.h));
-        const low = Math.min(...bars.map((b: any) => b.l));
-        const volume = bars.reduce((sum: number, b: any) => sum + b.v, 0);
+        const high = Math.max(...bars.map((b) => b.h));
+        const low = Math.min(...bars.map((b) => b.l));
+        const volume = bars.reduce((sum, b) => sum + b.v, 0);
 
         const rawStock: RawStock = {
           T: symbol,
